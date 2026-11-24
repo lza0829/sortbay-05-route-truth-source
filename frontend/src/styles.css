@@ -135,3 +135,23 @@ th { background: #e4e8ee; }
 .msg { margin: 0.5rem 0; color: var(--ok); }
 .err { margin: 0.5rem 0; color: var(--danger); }
 .muted { color: #66707c; font-size: 0.86rem; }
+
+tr.stale { background: #fdf3e3; }
+.badge-warn {
+  display: inline-block;
+  background: var(--warn);
+  color: #4a3600;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid #b98d2f;
+  font-size: 0.82rem;
+}
+.stat-warn { border-top-color: var(--danger); }
+.stat-warn .n { color: var(--danger); }
+.receipt {
+  margin: 0.6rem 0;
+  padding: 0.55rem 0.7rem;
+  background: #e9f2ec;
+  border-left: 4px solid var(--ok);
+  font-size: 0.9rem;
+}
+h3 { margin: 1.1rem 0 0.5rem; font-size: 1rem; border-left: 4px solid var(--warn); padding-left: 0.45rem; }

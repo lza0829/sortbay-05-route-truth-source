@@ -14,27 +14,33 @@ export default function Bags() {
     setBags(await api('/封袋'))
     const cs = await api('/口门'); setChutes(cs)
     if (!chuteId && cs[0]) setChuteId(String(cs[0].id))
-    const ss = await api('/扫描'); setScans(ss.filter((x) => x.status === '已路由'))
+    const ss = await api('/扫描')
+    // 在口校验同源：只有真源已路由且未入袋的件才可入袋
+    setScans(ss.filter((x) => x.真源已路由 && !x.bag_id && x.有效状态 === '已路由'))
   }
   useEffect(() => { load().catch((e) => setErr(e.message)) }, [])
   const openBag = async () => {
+    setErr(''); setMsg('')
     try {
       const b = await api('/封袋/开袋', { method: 'POST', body: JSON.stringify({ 口门编号: Number(chuteId) }) })
       setMsg(`已开袋 ${b.code}`); setBagId(String(b.id)); load()
     } catch (e) { setErr(e.message) }
   }
   const add = async () => {
+    setErr(''); setMsg('')
     try {
       await api(`/封袋/${bagId}/入袋`, { method: 'POST', body: JSON.stringify({ 扫描编号: Number(scanId) }) })
-      setMsg('入袋成功'); load()
-    } catch (e) { setErr(e.message) }
+      setMsg('入袋成功（真源口门已校验）'); load()
+    } catch (e) { setErr(`入袋被拒：${e.message}`) }
   }
   const seal = async () => {
+    setErr(''); setMsg('')
     try {
       await api(`/封袋/${bagId}/封口`, { method: 'POST' })
       setMsg('封袋成功'); load()
     } catch (e) { setErr(e.message) }
   }
+  const 口门码 = (id) => chutes.find((c) => c.id === id)?.code || (id == null ? '-' : `#${id}`)
   return (
     <div className="panel">
       <h2>封袋</h2>
@@ -50,10 +56,14 @@ export default function Bags() {
       </div>
       <div className="row">
         <label>袋编号<input value={bagId} onChange={(e) => setBagId(e.target.value)} /></label>
-        <label>已路由扫描
+        <label>已路由扫描（真源）
           <select value={scanId} onChange={(e) => setScanId(e.target.value)}>
             <option value="">选择</option>
-            {scans.map((s) => <option key={s.id} value={s.id}>{s.id} · {s.barcode}</option>)}
+            {scans.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.id} · {s.barcode} · 真源{口门码(s.真源口门)}{s.分叉 ? ' · ⚠列分叉' : ''}
+              </option>
+            ))}
           </select>
         </label>
         <button type="button" onClick={add}>入袋</button>

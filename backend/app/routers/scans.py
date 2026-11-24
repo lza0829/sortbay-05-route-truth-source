@@ -1,8 +1,9 @@
 from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from app.db import db, rows_to_list, row_to_dict
+from app.db import db, row_to_dict
 from app.services.common import audit, current_shift, now_str, require_unsealed
+from app.services.routed_truth import adjudicate, replay_all, truth_of, truth_view
 
 router = APIRouter(tags=["过机扫描"])
 
@@ -16,14 +17,16 @@ class ScanIn(BaseModel):
 
 @router.get("/扫描")
 def list_scans(状态: str | None = None):
+    """扫描册：口门以真源重放为准，缓存列仅对照，分叉必标。"""
     with db() as conn:
+        truths = replay_all(conn)
         if 状态:
             rows = conn.execute(
                 "SELECT * FROM scans WHERE status=? ORDER BY id DESC LIMIT 200", (状态,)
             ).fetchall()
         else:
             rows = conn.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 200").fetchall()
-        return rows_to_list(rows)
+        return [truth_view(r, truth_of(truths, r["id"])) for r in rows]
 
 
 @router.post("/扫描")
@@ -63,32 +66,7 @@ def create_scan(body: ScanIn):
 
 @router.post("/扫描/{scan_id}/路由")
 def route_scan(scan_id: int):
+    """路由裁决入口：事件与缓存同源落库，回执同刷扫描册/口门在口/总览分布。"""
     with db() as conn:
         require_unsealed(conn)
-        scan = conn.execute("SELECT * FROM scans WHERE id=?", (scan_id,)).fetchone()
-        if not scan:
-            raise HTTPException(404, "扫描不存在")
-        if scan["status"] not in ("待路由", "错分回流"):
-            raise HTTPException(400, f"当前状态不可路由: {scan['status']}")
-        if not scan["dest_code"]:
-            raise HTTPException(400, "缺少目的地码")
-        rule = conn.execute(
-            "SELECT * FROM route_rules WHERE dest_code=?", (scan["dest_code"],)
-        ).fetchone()
-        if not rule:
-            raise HTTPException(400, "无匹配路由")
-        chute = conn.execute("SELECT * FROM chutes WHERE id=?", (rule["chute_id"],)).fetchone()
-        if not chute:
-            raise HTTPException(400, "口门不存在")
-        if chute["status"] != "口门开":
-            raise HTTPException(400, "口门已闭，禁止落入")
-        conn.execute(
-            "UPDATE scans SET status='已路由', chute_id=? WHERE id=?",
-            (chute["id"], scan_id),
-        )
-        conn.execute(
-            "INSERT INTO route_events(scan_id, chute_id, action, created_at, note) VALUES (?, ?, ?, ?, ?)",
-            (scan_id, chute["id"], "路由落入", now_str(), chute["code"]),
-        )
-        audit(conn, "扫描", scan_id, "路由裁决", chute["code"])
-        return row_to_dict(conn.execute("SELECT * FROM scans WHERE id=?", (scan_id,)).fetchone())
+        return adjudicate(conn, scan_id)

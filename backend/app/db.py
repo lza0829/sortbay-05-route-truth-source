@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS scans (
   chute_id INTEGER,
   bag_id INTEGER,
   divert_batch_id INTEGER,
+  routed_event_id INTEGER,
   scanned_at TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '',
   FOREIGN KEY(shift_id) REFERENCES shifts(id),
@@ -119,6 +120,18 @@ def db():
 def init_db() -> None:
     with db() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
+
+
+def _migrate(conn) -> None:
+    """已路由真源：scans.routed_event_id 是口门缓存列的校准指针。
+
+    真源在 route_events（重放为准）；scans.chute_id 只是加速缓存，
+    routed_event_id 记录该缓存已校准到哪个路由事件，用于对账分叉检测。
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(scans)").fetchall()}
+    if "routed_event_id" not in cols:
+        conn.execute("ALTER TABLE scans ADD COLUMN routed_event_id INTEGER")
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict | None:

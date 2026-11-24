@@ -3,6 +3,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from app.db import db, rows_to_list, row_to_dict
 from app.services.common import audit, now_str
+from app.services.routed_truth import (
+    effective_status,
+    overview_buckets,
+    replay_all,
+    truth_of,
+)
 
 router = APIRouter(tags=["班次"])
 
@@ -20,6 +26,7 @@ def list_shifts():
 
 @router.get("/班次/对账")
 def reconcile(shift_id: int | None = None):
+    """班次对账：已路由及以上按真源重放计，分叉单列，禁止假列假齐。"""
     with db() as conn:
         if shift_id is None:
             shift = conn.execute("SELECT * FROM shifts ORDER BY id DESC LIMIT 1").fetchone()
@@ -29,10 +36,7 @@ def reconcile(shift_id: int | None = None):
             raise HTTPException(404, "班次不存在")
         sid = shift["id"]
         scan_n = conn.execute("SELECT COUNT(*) c FROM scans WHERE shift_id=?", (sid,)).fetchone()["c"]
-        routed = conn.execute(
-            "SELECT COUNT(*) c FROM scans WHERE shift_id=? AND status IN ('已路由','已入袋','已封袋')",
-            (sid,),
-        ).fetchone()["c"]
+        buckets = overview_buckets(conn, shift_id=sid)
         bag_n = conn.execute("SELECT COUNT(*) c FROM bags WHERE shift_id=?", (sid,)).fetchone()["c"]
         sealed_bag = conn.execute(
             "SELECT COUNT(*) c FROM bags WHERE shift_id=? AND status='已封袋'", (sid,)
@@ -40,18 +44,17 @@ def reconcile(shift_id: int | None = None):
         divert_n = conn.execute(
             "SELECT COUNT(*) c FROM divert_batches WHERE shift_id=?", (sid,)
         ).fetchone()["c"]
-        pending = conn.execute(
-            "SELECT COUNT(*) c FROM scans WHERE shift_id=? AND status IN ('待路由','错分回流')",
-            (sid,),
-        ).fetchone()["c"]
+        分布 = buckets["分布"]
         return {
             "班次": row_to_dict(shift),
             "扫描总数": scan_n,
-            "已路由及以上": routed,
+            "已路由及以上": 分布["已路由"] + 分布["已入袋"] + 分布["已封袋"],
             "袋数": bag_n,
             "已封袋数": sealed_bag,
             "回流批次数": divert_n,
-            "未清件数": pending,
+            "未清件数": 分布["待路由"] + 分布["错分回流"] + 分布["已路由"] + 分布["已入袋"],
+            "真源分布": 分布,
+            "分叉数": buckets["分叉数"],
         }
 
 
@@ -78,16 +81,18 @@ def create_shift(body: ShiftIn):
 
 @router.post("/班次/{shift_id}/封班")
 def seal_shift(shift_id: int):
+    """封班：未清件按真源有效状态计——假列（事件缺失）按待路由拦下，禁止假齐。"""
     with db() as conn:
         shift = conn.execute("SELECT * FROM shifts WHERE id=?", (shift_id,)).fetchone()
         if not shift:
             raise HTTPException(404, "班次不存在")
         if shift["sealed"]:
             raise HTTPException(400, "已封班")
-        pending = conn.execute(
-            "SELECT COUNT(*) c FROM scans WHERE shift_id=? AND status IN ('待路由','错分回流','已路由','已入袋')",
-            (shift_id,),
-        ).fetchone()["c"]
+        truths = replay_all(conn)
+        pending = 0
+        for s in conn.execute("SELECT * FROM scans WHERE shift_id=?", (shift_id,)).fetchall():
+            if effective_status(s, truth_of(truths, s["id"])) in ("待路由", "错分回流", "已路由", "已入袋"):
+                pending += 1
         if pending:
             raise HTTPException(400, f"仍有未封袋/未路由件 {pending}，禁止封班")
         conn.execute(
